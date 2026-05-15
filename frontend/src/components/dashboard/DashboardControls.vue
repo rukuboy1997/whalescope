@@ -87,36 +87,19 @@
     <!-- Stream status badge -->
     <div
       class="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border"
-      :class="
-        store.isPaused
-          ? isDark
-            ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-            : 'bg-amber-50 border-amber-200 text-amber-700'
-          : store.connectionStatus === 'connected'
-          ? isDark
-            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-            : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-          : isDark
-          ? 'bg-slate-700 border-slate-600 text-slate-400'
-          : 'bg-slate-100 border-slate-200 text-slate-500'
-      "
+      :class="statusBadgeClass"
     >
       <span
         class="w-1.5 h-1.5 rounded-full"
-        :class="
-          store.isPaused
-            ? 'bg-amber-400'
-            : store.connectionStatus === 'connected'
-            ? 'bg-emerald-400 animate-pulse'
-            : 'bg-slate-400'
-        "
+        :class="statusDotClass"
       />
-      <span>{{ store.isPaused ? "Paused" : store.connectionStatus === 'connected' ? "Streaming" : "Offline" }}</span>
+      <span>{{ statusLabel }}</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useWhaleStore } from "@/stores/whaleStore";
 import type { TimeRange } from "@/types";
 
@@ -152,4 +135,61 @@ const sideFilters: {
     activeClass: "bg-red-500/20 text-red-400 border-red-500/40",
   },
 ];
+
+const statusLabel = computed(() => {
+  if (store.isPaused) return "Paused";
+
+  const map: Record<string, string> = {
+    connected: "Streaming",
+    connecting: "Connecting…",
+    disconnected: "Reconnecting…",
+    error: "Connection Failed",
+  };
+
+  return map[store.connectionStatus] ?? store.connectionStatus;
+});
+
+const statusBadgeClass = computed(() => {
+  if (store.isPaused) {
+    return isDarkClass(
+      "bg-amber-500/10 border-amber-500/30 text-amber-400",
+      "bg-amber-50 border-amber-200 text-amber-700"
+    );
+  }
+
+  switch (store.connectionStatus) {
+    case "connected":
+      return isDarkClass(
+        "bg-emerald-500/10 border-emerald-500/30 text-emerald-400",
+        "bg-emerald-50 border-emerald-200 text-emerald-700"
+      );
+    case "connecting":
+      return isDarkClass(
+        "bg-yellow-500/10 border-yellow-500/30 text-yellow-400",
+        "bg-yellow-50 border-yellow-200 text-yellow-700"
+      );
+    case "error":
+      return isDarkClass(
+        "bg-red-500/10 border-red-500/30 text-red-400",
+        "bg-red-50 border-red-200 text-red-700"
+      );
+    default:
+      return isDarkClass(
+        "bg-slate-700 border-slate-600 text-slate-400",
+        "bg-slate-100 border-slate-200 text-slate-500"
+      );
+  }
+});
+
+const statusDotClass = computed(() => {
+  if (store.isPaused) return "bg-amber-400";
+  if (store.connectionStatus === "connected") return "bg-emerald-400 animate-pulse";
+  if (store.connectionStatus === "connecting") return "bg-yellow-400 animate-pulse";
+  if (store.connectionStatus === "error") return "bg-red-400";
+  return "bg-slate-400";
+});
+
+function isDarkClass(darkClass: string, lightClass: string) {
+  return store.isDarkMode ? darkClass : lightClass;
+}
 </script>

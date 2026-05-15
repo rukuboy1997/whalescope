@@ -125,8 +125,8 @@ app.get("/stream", (req, res) => {
     const initPayload = {
         type: "init",
         stats: getStats(),
-        whales: whaleHistory.slice(0, 50),
-        priceHistory: priceHistory.slice(-100),
+        whales: whaleHistory.slice(0, MAX_WHALES),
+        priceHistory: priceHistory.slice(-MAX_PRICES),
     };
     res.write(`data: ${JSON.stringify(initPayload)}\n\n`);
 

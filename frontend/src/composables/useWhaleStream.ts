@@ -14,6 +14,7 @@ export function useWhaleStream() {
     let eventSource: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let isDestroyed = false;
+    let isManualClose = false;
 
     function getApiUrl(): string {
         const env = import.meta.env.VITE_API_URL as string | undefined;
@@ -27,15 +28,19 @@ export function useWhaleStream() {
         }
     }
 
-    function closeEventSource() {
+    function closeEventSource(intentional = false) {
         if (eventSource) {
+            isManualClose = intentional;
+            eventSource.onopen = null;
+            eventSource.onmessage = null;
+            eventSource.onerror = null;
             eventSource.close();
             eventSource = null;
         }
     }
 
     function scheduleReconnect() {
-        if (isDestroyed) return;
+        if (isDestroyed || store.isPaused) return;
         if (reconnectAttempts.value >= MAX_ATTEMPTS) {
             store.setConnectionStatus("error");
             return;
@@ -82,10 +87,11 @@ export function useWhaleStream() {
     }
 
     function connect() {
-        if (isDestroyed) return;
+        if (isDestroyed || store.isPaused) return;
 
         clearReconnectTimer();
-        closeEventSource();
+        closeEventSource(true);
+        isManualClose = false;
 
         store.setConnectionStatus("connecting");
 
@@ -95,7 +101,7 @@ export function useWhaleStream() {
 
             eventSource.onopen = () => {
                 if (isDestroyed) {
-                    closeEventSource();
+                    closeEventSource(true);
                     return;
                 }
                 store.setConnectionStatus("connected");
@@ -105,7 +111,9 @@ export function useWhaleStream() {
             eventSource.onmessage = handleMessage;
 
             eventSource.onerror = () => {
-                closeEventSource();
+                const shouldReconnect = !isManualClose && !isDestroyed && !store.isPaused;
+                closeEventSource(false);
+                if (!shouldReconnect) return;
                 scheduleReconnect();
             };
         } catch {
@@ -115,20 +123,23 @@ export function useWhaleStream() {
 
     function disconnect() {
         clearReconnectTimer();
-        closeEventSource();
+        closeEventSource(true);
         store.setConnectionStatus("disconnected");
     }
 
     function pause() {
+        if (store.isPaused) return;
         store.setIsPaused(true);
+        clearReconnectTimer();
+        closeEventSource(true);
+        store.setConnectionStatus("disconnected");
     }
 
     function resume() {
+        if (!store.isPaused) return;
         store.setIsPaused(false);
-        if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
-            reconnectAttempts.value = 0;
-            connect();
-        }
+        reconnectAttempts.value = 0;
+        connect();
     }
 
     function togglePause() {
