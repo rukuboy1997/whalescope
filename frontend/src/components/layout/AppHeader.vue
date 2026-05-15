@@ -28,7 +28,7 @@
         >
           <span
             class="w-1.5 h-1.5 rounded-full"
-            :class="[statusStyle.dot, store.connectionStatus === 'connected' ? 'animate-pulse' : '']"
+            :class="[statusStyle.dot, shouldPulse ? 'animate-pulse' : '']"
           />
           <span :class="statusStyle.text">{{ statusLabel }}</span>
         </div>
@@ -100,6 +100,8 @@ defineEmits<{ "toggle-pause": [] }>();
 const store = useWhaleStore();
 
 const statusLabel = computed(() => {
+  if (store.isPaused) return "Paused";
+
   const map: Record<string, string> = {
     connecting: "Connecting…",
     connected: "Live",
@@ -111,6 +113,16 @@ const statusLabel = computed(() => {
 
 const statusStyle = computed(() => {
   const dark = store.isDarkMode;
+  if (store.isPaused) {
+    return {
+      container: dark
+        ? "bg-amber-500/10 border-amber-500/30"
+        : "bg-amber-50 border-amber-200",
+      dot: "bg-amber-400",
+      text: dark ? "text-amber-400" : "text-amber-700",
+    };
+  }
+
   switch (store.connectionStatus) {
     case "connected":
       return {
@@ -144,4 +156,6 @@ const statusStyle = computed(() => {
       };
   }
 });
+
+const shouldPulse = computed(() => !store.isPaused && store.connectionStatus === "connected");
 </script>
