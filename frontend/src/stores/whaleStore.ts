@@ -11,8 +11,8 @@ import type {
 } from "@/types";
 import { isValidWhale, isValidPricePoint, isValidStats } from "@/utils/validators";
 
-const MAX_WHALES = 200;
-const MAX_PRICES = 500;
+const MAX_WHALES = 10_000;
+const MAX_PRICES = 5_000;
 
 const DEFAULT_STATS: Stats = {
     whaleCount: 0,
@@ -32,6 +32,7 @@ export const useWhaleStore = defineStore("whale", () => {
     const sideFilter = ref<"ALL" | "LONG" | "SHORT">("ALL");
     const minValueFilter = ref(0);
     const lastHeartbeat = ref<number>(0);
+    const isHistoryLoaded = ref(false);
 
     const whales = ref<Whale[]>([]);
     const priceHistory = ref<PricePoint[]>([]);
@@ -52,11 +53,7 @@ export const useWhaleStore = defineStore("whale", () => {
 
     function toggleDarkMode() {
         isDarkMode.value = !isDarkMode.value;
-        if (isDarkMode.value) {
-            document.documentElement.classList.add("dark");
-        } else {
-            document.documentElement.classList.remove("dark");
-        }
+        document.documentElement.classList.toggle("dark", isDarkMode.value);
     }
 
     function setSideFilter(filter: "ALL" | "LONG" | "SHORT") {
@@ -71,20 +68,75 @@ export const useWhaleStore = defineStore("whale", () => {
         lastHeartbeat.value = ts;
     }
 
-    function initData(data: { stats: Stats; whales: Whale[]; priceHistory: PricePoint[] }) {
-        if (isValidStats(data.stats)) {
-            stats.value = data.stats;
-        }
-        const validWhales = (data.whales || []).filter(isValidWhale);
-        whales.value = validWhales.slice(0, MAX_WHALES);
+    function setHistoryLoaded(loaded: boolean) {
+        isHistoryLoaded.value = loaded;
+    }
 
-        const validPrices = (data.priceHistory || []).filter(isValidPricePoint);
+    /** Full replace — used when loading from IndexedDB cache on startup */
+    function loadFromCache(data: { whales: Whale[]; prices: PricePoint[] }) {
+        const validWhales = data.whales.filter(isValidWhale);
+        const validPrices = data.prices.filter(isValidPricePoint);
+        whales.value = validWhales.slice(0, MAX_WHALES);
         priceHistory.value = validPrices.slice(-MAX_PRICES);
+        if (validPrices.length > 0) {
+            stats.value = {
+                ...stats.value,
+                currentPrice: validPrices[validPrices.length - 1].price,
+            };
+        }
+        isHistoryLoaded.value = true;
+    }
+
+    /**
+     * Merge server history with what we already have in memory.
+     * Server data is authoritative — deduplicate by time+value, keep newest entries.
+     */
+    function mergeServerHistory(data: {
+        whales: Whale[];
+        prices: PricePoint[];
+        stats: Stats;
+    }) {
+        if (isValidStats(data.stats)) stats.value = data.stats;
+
+        // Build a Set of existing whale fingerprints
+        const existingKeys = new Set(whales.value.map((w) => `${w.time}-${w.value}`));
+        const newWhales = data.whales
+            .filter(isValidWhale)
+            .filter((w) => !existingKeys.has(`${w.time}-${w.value}`));
+
+        // Merge and sort newest-first, cap to MAX
+        const merged = [...whales.value, ...newWhales];
+        merged.sort((a, b) => b.time - a.time);
+        whales.value = merged.slice(0, MAX_WHALES);
+
+        // For prices: merge and sort oldest-first
+        const existingTimes = new Set(priceHistory.value.map((p) => p.time));
+        const newPrices = data.prices
+            .filter(isValidPricePoint)
+            .filter((p) => !existingTimes.has(p.time));
+
+        const mergedPrices = [...priceHistory.value, ...newPrices];
+        mergedPrices.sort((a, b) => a.time - b.time);
+        priceHistory.value = mergedPrices.slice(-MAX_PRICES);
+
+        isHistoryLoaded.value = true;
+    }
+
+    /** Called on SSE init — merges the server snapshot without losing existing local data */
+    function initData(data: { stats: Stats; whales: Whale[]; priceHistory: PricePoint[] }) {
+        mergeServerHistory({
+            whales: data.whales,
+            prices: data.priceHistory,
+            stats: data.stats,
+        });
     }
 
     function addWhale(whale: Whale, newStats: Stats) {
         if (!isValidWhale(whale)) return;
         if (isValidStats(newStats)) stats.value = newStats;
+
+        // Avoid duplicates if we somehow get the same event twice
+        if (whales.value.length > 0 && whales.value[0].time === whale.time && whales.value[0].value === whale.value) return;
 
         whales.value.unshift(whale);
         if (whales.value.length > MAX_WHALES) whales.value.pop();
@@ -103,6 +155,7 @@ export const useWhaleStore = defineStore("whale", () => {
         whales.value = [];
         priceHistory.value = [];
         stats.value = { ...DEFAULT_STATS };
+        isHistoryLoaded.value = false;
     }
 
     // ── Computed / Derived ────────────────────────────────────────────────
@@ -141,32 +194,21 @@ export const useWhaleStore = defineStore("whale", () => {
     const priceChartData = computed(() => {
         const cutoff = windowStartTime.value;
         const data = priceHistory.value.filter((p) => p.time >= cutoff);
-        // Sample to max 200 points for performance
-        if (data.length <= 200) return data.map((p) => [p.time, p.price]);
-        const step = Math.ceil(data.length / 200);
+        if (data.length <= 300) return data.map((p) => [p.time, p.price]);
+        const step = Math.ceil(data.length / 300);
         return data.filter((_, i) => i % step === 0).map((p) => [p.time, p.price]);
     });
 
     const timeBuckets = computed((): TimeBucket[] => {
         const range = timeRange.value;
         const now = Date.now();
-        // Determine bucket size (ms) and count
         let bucketMs: number;
         let bucketCount: number;
 
-        if (range === 1) {
-            bucketMs = 10_000; // 10s buckets
-            bucketCount = 6;
-        } else if (range === 5) {
-            bucketMs = 30_000; // 30s buckets
-            bucketCount = 10;
-        } else if (range === 15) {
-            bucketMs = 60_000; // 1m buckets
-            bucketCount = 15;
-        } else {
-            bucketMs = 300_000; // 5m buckets
-            bucketCount = 12;
-        }
+        if (range === 1) { bucketMs = 10_000; bucketCount = 6; }
+        else if (range === 5) { bucketMs = 30_000; bucketCount = 10; }
+        else if (range === 15) { bucketMs = 60_000; bucketCount = 15; }
+        else { bucketMs = 300_000; bucketCount = 12; }
 
         const buckets: TimeBucket[] = [];
         for (let i = bucketCount - 1; i >= 0; i--) {
@@ -209,7 +251,6 @@ export const useWhaleStore = defineStore("whale", () => {
         const whaleFreq = Math.min(Math.round((windowStats.value.count / (timeRange.value * 2)) * 100), 100);
         const volumeScore = Math.min(Math.round(((windowStats.value.longVolume + windowStats.value.shortVolume) / 1_000_000) * 100), 100);
         const biggestRatio = Math.min(Math.round((stats.value.biggestWhale / 1_000_000) * 100), 100);
-
         return [bullishPressure, bearishPressure, whaleFreq, volumeScore, biggestRatio];
     });
 
@@ -220,36 +261,14 @@ export const useWhaleStore = defineStore("whale", () => {
 
     return {
         // State
-        connectionStatus,
-        isPaused,
-        timeRange,
-        isDarkMode,
-        sideFilter,
-        minValueFilter,
-        lastHeartbeat,
-        whales,
-        priceHistory,
-        stats,
+        connectionStatus, isPaused, timeRange, isDarkMode, sideFilter,
+        minValueFilter, lastHeartbeat, whales, priceHistory, stats, isHistoryLoaded,
         // Setters
-        setConnectionStatus,
-        setIsPaused,
-        setTimeRange,
-        toggleDarkMode,
-        setSideFilter,
-        setMinValueFilter,
-        setLastHeartbeat,
-        initData,
-        addWhale,
-        addPrice,
-        resetData,
+        setConnectionStatus, setIsPaused, setTimeRange, toggleDarkMode,
+        setSideFilter, setMinValueFilter, setLastHeartbeat, setHistoryLoaded,
+        loadFromCache, mergeServerHistory, initData, addWhale, addPrice, resetData,
         // Computed
-        windowStartTime,
-        filteredWhales,
-        windowStats,
-        longShortRatio,
-        priceChartData,
-        timeBuckets,
-        radarData,
-        recentWhaleCount,
+        windowStartTime, filteredWhales, windowStats, longShortRatio,
+        priceChartData, timeBuckets, radarData, recentWhaleCount,
     };
 });

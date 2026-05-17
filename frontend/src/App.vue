@@ -94,6 +94,22 @@
         </div>
       </div>
 
+      <!-- History loading banner -->
+      <Transition name="fade">
+        <div
+          v-if="stream.isLoadingHistory.value && store.whales.length === 0"
+          class="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-xl border text-sm font-medium flex items-center gap-2.5 shadow-xl"
+          :class="
+            store.isDarkMode
+              ? 'bg-slate-800/95 border-slate-700 text-slate-300 backdrop-blur-md'
+              : 'bg-white border-slate-200 text-slate-600 shadow-lg'
+          "
+        >
+          <span class="w-3.5 h-3.5 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
+          <span>Loading 24h history…</span>
+        </div>
+      </Transition>
+
       <!-- Error / Disconnected banner -->
       <Transition name="fade">
         <div
